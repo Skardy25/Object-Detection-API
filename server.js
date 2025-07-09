@@ -4,6 +4,7 @@ const bodyParser = require('body-parser');
 const fs = require('fs');
 const path = require('path');
 const cors = require('cors');
+const sharp = require('sharp'); //Llamar al editor de imagenes 
 
 require('dotenv').config();
 
@@ -83,8 +84,48 @@ async function sendImageToTelegram(imageBuffer, filename = 'image.jpg') {
         console.error("Error al enviar a Telegram:", result);
         return false;
     }
-
     return true;
+}
+
+async function drawBoundingBoxes(imageBuffer, regions) {
+    const image = sharp(imageBuffer);
+    const metadata = await image.metadata();
+    const imageWidth = metadata.width;
+    const imageHeight = metadata.height;
+
+    let svgRects = '';
+    let svgTexts = '';
+
+    regions.forEach( region => {
+        if(region.regionInfo && region.regionInfo.boundingBox){
+            const bbox = region.regionInfo.boundingBox;
+
+            const top = Math.round(bbox.topRow * imageHeight);
+            const left = Math.round(bbox.leftCol * imageWidth);
+            const bottom = Math.round(bbox.bottomRow * imageHeight);
+            const right = Math.round(bbox.rightCol * imageWidth);
+
+            const rectWidth = right - left;
+            const rectHeight = bottom - top;
+
+            //Dibuja el rectangulo
+            svgRects += `<rect x="${left}" y="${top}" width="${rectWidth}" height="${rectHeight}" stroke="#FF0000" stroke-width="5" fill="none" />`;
+
+            let conceptName = 'Persona';
+            svgTexts += `<text x="${left + 5}" y="${top < 20 ? top + 20 : top - 5}" font-family="Arial" font-size="20" fill="#FF0000" stroke="#000000" stroke-width="0.5">${conceptName}</text>`;
+        }
+    });
+
+    const svg = `<svg width="${imageWidth}" height="${imageHeight}">${svgRects}${svgTexts}</svg>`
+
+    const outputBuffer = await image.composite([{
+        input: Buffer.from(svg),
+        top: 0,
+        left: 0,
+        blend: 'over'
+    }]).toBuffer();
+
+    return outputBuffer;
 }
 
 // Endpoint para recibir imagen como multipart/form-data
@@ -94,23 +135,28 @@ app.post('/upload', upload.single('image'), async (req, res) => {
     }
 
     const filePath = req.file.path;
-
     try {
         const imageBuffer = fs.readFileSync(filePath);
-
-
         // Llamar a Clarifai
         const prediction = await OCRWorkflow.predictByBytes(imageBuffer, "image");
         //const lastOutputIndex = prediction.resultsList[0].outputsList.length - 1;
         const results = prediction.resultsList[0].outputsList[0].data.regionsList;
+        const objects = results.map(region => ({
+            regionInfo: region.regionInfo,
+            value: region.data.conceptsList[0].name,
+        }))
+        const objectFiltered = objects.filter(obj => obj.value === 'person');
+
+        //DIBUJAR RECTANGULOS
+        const imageBufferWithBoxes = await drawBoundingBoxes(imageBuffer, objectFiltered);
 
         //ENVIAR A TELEGRAM
-        const success = await sendImageToTelegram(imageBuffer, req.file.originalname);
+        const success = await sendImageToTelegram(imageBufferWithBoxes, req.file.originalname);
 
         fs.unlinkSync(filePath); // Borrar después de enviar
 
         if (success) {
-            res.json({ message: 'Imagen enviada a Telegram correctamente.', results: results });
+            res.json({ message: 'Imagen enviada a Telegram correctamente.', results: objects });
         } else {
             res.status(500).json({ error: 'Error al enviar la imagen a Telegram.' });
         }
@@ -151,10 +197,19 @@ app.post('/upload-base64', async (req, res) => {
         //const lastOutputIndex = prediction.resultsList[0].outputsList.length - 1;
         //console.log(prediction);
         const results = prediction.resultsList[0].outputsList[0].data.regionsList;
+        
+        const objects = results.map(region => ({
+            regionInfo: region.regionInfo,
+            value: region.data.conceptsList[0].name,
+        }))
+        const objectFiltered = objects.filter(obj => obj.value === 'person');
+
+        //DIBUJAR RECTANGULOS
+        const imageBufferWithBoxes = await drawBoundingBoxes(imageBuffer, objectFiltered);
 
         // Usar FormData para enviar a Telegram
         const formData = new FormData();
-        const blob = new Blob([imageBuffer], { type: 'image/jpeg' });
+        const blob = new Blob([imageBufferWithBoxes], { type: 'image/jpeg' });
         formData.append('photo', blob);
 
         const response = await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendPhoto?chat_id=${CHAT_ID}`, {
