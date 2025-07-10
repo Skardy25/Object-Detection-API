@@ -18,7 +18,6 @@ const CHAT_ID = process.env.KEY_CHAT_ID;
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Configuración de carpeta de subidas
 
 // Configurar carpeta de subidas
 const UPLOAD_FOLDER = './uploads';
@@ -203,9 +202,26 @@ app.post('/upload-base64', async (req, res) => {
             value: region.data.conceptsList[0].name,
         }))
         const objectFiltered = objects.filter(obj => obj.value === 'person');
-
+        if(objectFiltered.length === 0) {
+            return res.status(400).json({ code: 1001, error: 'No se encontraron personas en la imagen.' });
+        }
         //DIBUJAR RECTANGULOS
         const imageBufferWithBoxes = await drawBoundingBoxes(imageBuffer, objectFiltered);
+        
+        //ENVIAR MENSAJE A TELEGRAM
+        const messageText = `Movimiento detectado: ${objectFiltered.length} persona(s) encontrada(s).`;
+        const sendMessageResponse = await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ chat_id: CHAT_ID, text: messageText })
+        });
+        const sendMessageResult = await sendMessageResponse.json();
+
+        if (!sendMessageResult.ok) {
+            console.error("Error al enviar mensaje de Telegram:", sendMessageResult);
+        } else {
+            console.log("Mensaje de movimiento detectado enviado a Telegram.");
+        }
 
         // Usar FormData para enviar a Telegram
         const formData = new FormData();
@@ -220,13 +236,13 @@ app.post('/upload-base64', async (req, res) => {
         const result = await response.json();
 
         if (result.ok) {
-            res.json({ message: 'Imagen en Base64 enviada a Telegram correctamente.' , results: results});
+            res.json({ code: 1004, message: 'Imagen en Base64 enviada a Telegram correctamente.'});
         } else {
-            res.status(500).json({ error: 'Error al enviar la imagen a Telegram.' });
+            res.status(500).json({ code: 1001, error: 'Error al enviar la imagen a Telegram.' });
         }
     } catch (err) {
         console.error(err);
-        res.status(500).json({ error: 'Hubo un problema procesando la imagen.' });
+        res.status(500).json({ code: 1001, error: 'Hubo un problema procesando la imagen.' });
     }
 });
 
