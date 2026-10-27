@@ -132,6 +132,60 @@ app.post('/upload', upload.single('image'), async (req, res) => {
     }
 });
 
+
+app.post('/upload-base64-ok', async (req, res) => {
+    try {
+        const image = req.body?.image;
+
+        if (!image || typeof image !== 'string') {
+            return res.status(400).json({
+                error: 'No se recibió una imagen Base64 válida.'
+            });
+        }
+
+        // Aceptar Base64 con o sin encabezado data:image
+        const base64Data = image.replace(
+            /^data:image\/[a-zA-Z0-9.+-]+;base64,/,
+            ''
+        ).replace(/\s/g, '');
+
+        if (!base64Data || !/^[A-Za-z0-9+/]*={0,2}$/.test(base64Data)) {
+            return res.status(400).json({
+                error: 'El contenido Base64 no es válido.'
+            });
+        }
+
+        const imageBuffer = Buffer.from(base64Data, 'base64');
+
+        if (imageBuffer.length === 0) {
+            return res.status(400).json({
+                error: 'La imagen está vacía.'
+            });
+        }
+
+        console.log(
+            `Imagen recibida: ${imageBuffer.length} bytes`
+        );
+
+        // Enviar directamente a Telegram, sin IA
+        await sendImageToTelegram(imageBuffer, 'captura.jpg');
+
+        return res.status(200).json({
+            success: true,
+            code: 1004,
+            message: 'Imagen enviada a Telegram correctamente.'
+        });
+
+    } catch (err) {
+        console.error('ERROR REAL:', err);
+
+        return res.status(500).json({
+            success: false,
+            error: err.message
+        });
+    }
+});
+
 // Endpoint 2: recibir imagen mediante JSON y Base64
 app.post('/upload-base64', async (req, res) => {
     const { image } = req.body || {};
